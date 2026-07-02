@@ -254,6 +254,24 @@ print_tls_fingerprint_from_tcp() {
 print_tls_fingerprint_from_logs() {
   command -v journalctl >/dev/null 2>&1 || return 1
   local line fingerprint
+
+  line="$(
+    journalctl -u "$SERVICE_NAME" -n 300 --no-pager 2>/dev/null |
+      grep -Eai 'CERT_SHA256\|' |
+      tail -n 1 || true
+  )"
+  if [[ -n "$line" ]]; then
+    fingerprint="$(
+      printf '%s\n' "$line" |
+        sed -nE 's/.*CERT_SHA256\|([A-Fa-f0-9]{64}).*/\1/p' |
+        tail -n 1
+    )"
+    [[ -n "$fingerprint" ]] && {
+      printf '%s\n' "$fingerprint"
+      return 0
+    }
+  fi
+
   line="$(
     journalctl -u "$SERVICE_NAME" -n 300 --no-pager 2>/dev/null |
       grep -Eai 'fingerprint|sha-?256' |
@@ -285,13 +303,13 @@ print_tls_fingerprint() {
   echo
   echo "当前 tls=1 自签证书 SHA-256 fingerprint："
   local fingerprint
-  if fingerprint="$(print_tls_fingerprint_from_tcp)"; then
+  if fingerprint="$(print_tls_fingerprint_from_logs)"; then
     echo "  ${fingerprint}"
     echo
     echo "提示：tls=1 证书存在内存中，Nowhere 每次重启后 fingerprint 都会变化。"
     return 0
   fi
-  if fingerprint="$(print_tls_fingerprint_from_logs)"; then
+  if fingerprint="$(print_tls_fingerprint_from_tcp)"; then
     echo "  ${fingerprint}"
     echo
     echo "提示：tls=1 证书存在内存中，Nowhere 每次重启后 fingerprint 都会变化。"

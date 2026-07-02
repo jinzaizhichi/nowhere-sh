@@ -100,6 +100,8 @@ sudo bash nowhere-vps.sh fingerprint
 
 或者进入菜单选择 `11`。
 
+脚本会优先读取 Nowhere `v1.2.5+` 日志中的 `CERT_SHA256|...` 字段；如果没有读到，再回退到本机 TLS 探测或旧日志匹配。
+
 因为 `tls=1` 的证书存在内存中，Nowhere 每次重启后 fingerprint 都会变化。生产环境仍建议使用 `tls=2` 配置稳定证书。
 
 ## 安装向导
