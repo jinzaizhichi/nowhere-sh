@@ -18,6 +18,7 @@ systemd 服务，并在安装完成后输出 `nowhere://` 导入链接和
 - 支持 `tls=1` 自签临时证书和 `tls=2` PEM 证书。
 - 支持速率限制、出站源地址、日志级别、Anywhere TCP pool。
 - 支持 Nowhere `v1.2.4+` 的 `socks` 出站 SOCKS5 上游代理。
+- 支持 Nowhere `v1.3.0+` 的 Anywhere `up=` / `down=` carrier 导入链接。
 
 ## 系统要求
 
@@ -193,7 +194,7 @@ sudo bash nowhere-vps.sh uninstall
 | `NOWHERE_DIAL` | `--dial` | `auto` | 出站源 IP 或 `auto` |
 | `NOWHERE_SOCKS` | `--socks` | `none` | SOCKS5 出站上游 |
 | `NOWHERE_LOG` | `--log` | `info` | `none`、`debug`、`info`、`warn`、`error`、`event` |
-| `NOWHERE_POOL` | `--pool` | `5` | Anywhere `net=tcp` 导入链接的 TCP pool 大小 |
+| `NOWHERE_POOL` | `--pool` | `5` | Anywhere `up=tcp&down=tcp` 导入链接的 TCP pool 大小 |
 
 ## 防火墙
 
@@ -221,7 +222,16 @@ sudo firewall-cmd --reload
 - `nowhere://...`
 - `anywhere://add-proxy?link=...`
 
-在 iPhone、iPad 或 Apple TV 上，可以复制 `nowhere://` 链接到 Anywhere 中导入；如果系统能识别 Anywhere deep link，也可以直接打开 `anywhere://add-proxy?link=...`。
+Nowhere `v1.3.0+` 的 Anywhere 链接使用 `up=` 和 `down=`：
+
+- `up=udp&down=udp`：QUIC/UDP，UDP 可通时推荐使用。
+- `up=tcp&down=tcp`：TLS/TCP fallback，带配置的 TCP pool。
+- `up=tcp&down=udp` 和 `up=udp&down=tcp`：非对称 carrier 链接，只会在
+  `NOWHERE_NET=mix` 且未配置 SOCKS5 上游时打印。
+
+旧的客户端 `net=` 参数仍属于 Anywhere legacy import；本脚本新生成的链接会直接使用 `up=` / `down=`。
+
+在 iPhone、iPad 或 Apple TV 上，可以复制 `nowhere://` 链接到 Anywhere 中导入；如果系统能识别 Anywhere deep link，也可以直接打开对应的 `anywhere://add-proxy?link=...`。
 
 如果忘记保存链接，在 VPS 上运行：
 

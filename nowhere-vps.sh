@@ -138,7 +138,7 @@ Options:
   --dial auto              Outbound source IP or auto
   --socks none             SOCKS5 outbound proxy: host:port or user:pass@host:port
   --log info               none|debug|info|warn|error|event
-  --pool 5                 Anywhere TCP pool size for net=tcp links
+  --pool 5                 Anywhere TCP pool size for up=tcp/down=tcp links
 
 Environment variables with the same names are also supported, for example:
   NOWHERE_PORT=443 NOWHERE_NET=mix sudo -E bash nowhere-vps.sh install --yes
@@ -501,6 +501,25 @@ build_portal_url() {
   printf 'portal://%s@%s:%s?%s' "$encoded_key" "$host_part" "$NOWHERE_PORT" "$query"
 }
 
+build_client_query() {
+  local up="$1"
+  local down="$2"
+  local query
+  query="up=${up}&down=${down}"
+
+  if [[ "$up" == "tcp" && "$down" == "tcp" ]]; then
+    query="${query}&pool=${NOWHERE_POOL_VALUE:-$DEFAULT_POOL}"
+  fi
+  if [[ -n "${NOWHERE_SPEC_VALUE:-}" ]]; then
+    query="${query}&spec=$(urlencode "$NOWHERE_SPEC_VALUE")"
+  fi
+  if [[ -n "${NOWHERE_ALPN_VALUE:-}" && "$NOWHERE_ALPN_VALUE" != "$DEFAULT_ALPN" ]]; then
+    query="${query}&alpn=$(urlencode "$NOWHERE_ALPN_VALUE")"
+  fi
+
+  printf '%s' "$query"
+}
+
 configure_values() {
   load_config
 
@@ -673,8 +692,8 @@ print_links() {
   load_config
   [[ -n "${NOWHERE_KEY_VALUE:-}" ]] || die "No config found. Run install or configure first."
 
-  local host host_part encoded_key encoded_name base query udp_link tcp_link
-  local import_udp import_tcp
+  local host host_part encoded_key encoded_name base udp_link tcp_link tcp_udp_link udp_tcp_link
+  local import_udp import_tcp import_tcp_udp import_udp_tcp
   host="${NOWHERE_PUBLIC_HOST_VALUE:-}"
   [[ -n "$host" ]] || host="$(detect_public_host)"
   [[ -n "$host" ]] || die "Public host is empty. Re-run configure with --public-host."
@@ -683,52 +702,56 @@ print_links() {
   encoded_name="$(urlencode "Nowhere VPS")"
   base="nowhere://${encoded_key}@${host_part}:${NOWHERE_PORT_VALUE}"
 
-  query="net=udp"
-  if [[ -n "${NOWHERE_SPEC_VALUE:-}" ]]; then
-    query="${query}&spec=$(urlencode "$NOWHERE_SPEC_VALUE")"
-  fi
-  if [[ -n "${NOWHERE_ALPN_VALUE:-}" && "$NOWHERE_ALPN_VALUE" != "$DEFAULT_ALPN" ]]; then
-    query="${query}&alpn=$(urlencode "$NOWHERE_ALPN_VALUE")"
-  fi
-  udp_link="${base}?${query}#${encoded_name}"
+  udp_link="${base}?$(build_client_query udp udp)#${encoded_name}"
+  tcp_link="${base}?$(build_client_query tcp tcp)#${encoded_name}"
+  tcp_udp_link="${base}?$(build_client_query tcp udp)#${encoded_name}"
+  udp_tcp_link="${base}?$(build_client_query udp tcp)#${encoded_name}"
 
-  query="net=tcp&pool=${NOWHERE_POOL_VALUE:-$DEFAULT_POOL}"
-  if [[ -n "${NOWHERE_SPEC_VALUE:-}" ]]; then
-    query="${query}&spec=$(urlencode "$NOWHERE_SPEC_VALUE")"
-  fi
-  if [[ -n "${NOWHERE_ALPN_VALUE:-}" && "$NOWHERE_ALPN_VALUE" != "$DEFAULT_ALPN" ]]; then
-    query="${query}&alpn=$(urlencode "$NOWHERE_ALPN_VALUE")"
-  fi
-  tcp_link="${base}?${query}#${encoded_name}"
-
-  import_udp="anywhere://add-proxy?link=${udp_link}"
-  import_tcp="anywhere://add-proxy?link=${tcp_link}"
+  import_udp="anywhere://add-proxy?link=$(urlencode "$udp_link")"
+  import_tcp="anywhere://add-proxy?link=$(urlencode "$tcp_link")"
+  import_tcp_udp="anywhere://add-proxy?link=$(urlencode "$tcp_udp_link")"
+  import_udp_tcp="anywhere://add-proxy?link=$(urlencode "$udp_tcp_link")"
 
   echo
   echo "Portal URL:"
   echo "  ${NOWHERE_PORTAL:-}"
   echo
   if [[ "${NOWHERE_NET_VALUE:-mix}" == "tcp" ]]; then
-    echo "Anywhere import link (TLS/TCP):"
+    echo "Anywhere import link (TLS/TCP, up=tcp/down=tcp):"
     echo "  ${tcp_link}"
     echo
     echo "Anywhere deep link:"
     echo "  ${import_tcp}"
   elif [[ "${NOWHERE_NET_VALUE:-mix}" == "udp" ]]; then
-    echo "Anywhere import link (QUIC/UDP):"
+    echo "Anywhere import link (QUIC/UDP, up=udp/down=udp):"
     echo "  ${udp_link}"
     echo
     echo "Anywhere deep link:"
     echo "  ${import_udp}"
   else
-    echo "Anywhere import link (QUIC/UDP recommended):"
+    echo "Anywhere import link (QUIC/UDP, up=udp/down=udp recommended):"
     echo "  ${udp_link}"
     echo
-    echo "Anywhere import link (TLS/TCP fallback):"
+    echo "Anywhere import link (TLS/TCP fallback, up=tcp/down=tcp):"
     echo "  ${tcp_link}"
+    if [[ -z "${NOWHERE_SOCKS_VALUE:-}" || "${NOWHERE_SOCKS_VALUE}" == "$DEFAULT_SOCKS" ]]; then
+      echo
+      echo "Anywhere import links (asymmetric carriers, Nowhere v1.3.0+):"
+      echo "  up=tcp/down=udp: ${tcp_udp_link}"
+      echo "  up=udp/down=tcp: ${udp_tcp_link}"
+    fi
     echo
     echo "Anywhere deep link (QUIC/UDP):"
     echo "  ${import_udp}"
+    echo
+    echo "Anywhere deep link (TLS/TCP):"
+    echo "  ${import_tcp}"
+    if [[ -z "${NOWHERE_SOCKS_VALUE:-}" || "${NOWHERE_SOCKS_VALUE}" == "$DEFAULT_SOCKS" ]]; then
+      echo
+      echo "Anywhere deep links (asymmetric carriers):"
+      echo "  up=tcp/down=udp: ${import_tcp_udp}"
+      echo "  up=udp/down=tcp: ${import_udp_tcp}"
+    fi
   fi
 
   echo
