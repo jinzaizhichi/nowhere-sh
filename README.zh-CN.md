@@ -2,11 +2,11 @@
 
 [English](README.md)
 
-Nowhere Portal 的 Linux VPS 一键部署脚本，适合搭配 Anywhere 客户端使用。
+Nowhere Portal 的 Linux VPS 一键部署脚本，同时支持旧版 Anywhere 兼容协议和
+Nowhere v1.5 新增的 Native Vector 原生客户端协议。
 
-脚本会自动下载 `NodePassProject/Nowhere` 最新 Linux release，安装二进制，生成
-systemd 服务，并在安装完成后输出 `nowhere://` 导入链接和
-`anywhere://add-proxy?link=...` 深链。
+脚本会安装明确指定的 Release 版本，生成 systemd 服务，并按协议版本输出正确的
+`nowhere://` 或 `vector://` 客户端链接。
 
 ## 功能
 
@@ -18,7 +18,22 @@ systemd 服务，并在安装完成后输出 `nowhere://` 导入链接和
 - 支持 `tls=1` 自签临时证书和 `tls=2` PEM 证书。
 - 支持速率限制、出站源地址、日志级别、Anywhere TCP pool。
 - 支持 Nowhere `v1.2.4+` 的 `socks` 出站 SOCKS5 上游代理。
-- 支持 Nowhere `v1.3.0+` 的 Anywhere `up=` / `down=` carrier 导入链接。
+- 可联网读取最近 10 个 GitHub Release，通过数字选择指定版本。
+- v1.4 及更早版本输出 Anywhere 链接，并按版本自动使用 `net=` 或 `up/down`。
+- v1.5+ 输出 Native Vector 链接，支持 `sni`、本地 SOCKS5 入口、分离上下行
+  carrier，以及最大 256 的 TCP pool。
+
+## 协议兼容性
+
+Nowhere v1.5 更换了线协议，当前 Anywhere 客户端不能连接 v1.5 Portal：
+
+| 模式 | Portal 版本 | 客户端 | 客户端链接 |
+| --- | --- | --- | --- |
+| Anywhere 兼容模式 | v1.4.0 及更早 | Anywhere | `nowhere://...` |
+| Native Vector 模式 | v1.5.0 及以后 | 同协议版本 Nowhere 二进制 | `vector://...` |
+
+Anywhere 入口默认安装 v1.4.0，Native Vector 入口默认安装 v1.5.0。Portal 和
+Native Vector 客户端必须使用兼容的协议版本。
 
 ## 系统要求
 
@@ -39,30 +54,43 @@ sudo bash nowhere-vps.sh
 直接运行脚本会进入数字菜单：
 
 ```text
-1) 安装/重装（向导，一路回车使用默认值）
-2) 快速默认安装（不提问）
-3) 修改配置（向导）
-4) 更新 Nowhere 二进制
-5) 启动服务
-6) 停止服务
-7) 重启服务
-8) 查看状态
-9) 查看日志
-10) 打印 Anywhere 导入链接
-11) 查看 tls=1 自签证书 SHA-256
-12) 卸载服务
+1) 安装/重装 Anywhere 兼容版 v1.4.0
+2) 安装/重装 Native Vector 版 v1.5.0
+3) 快速默认安装 Anywhere 兼容版
+4) 修改当前协议模式配置
+5) 指定 Release 安装/切换（最近 10 个版本）
+6) 启动服务
+7) 停止服务
+8) 重启服务
+9) 查看状态
+10) 查看日志
+11) 打印客户端链接/命令
+12) 查看 tls=1 自签证书 SHA-256
+13) 卸载服务
 0) 退出
 ```
 
-第一次使用建议选择 `1`，然后一路回车即可使用默认值完成安装。
+使用 Anywhere 选择 `1`，使用 Native Vector 选择 `2`，然后一路回车即可按默认值安装。
 
 也可以一行执行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chikacya/nowhere-sh/main/nowhere-vps.sh | sudo bash -s -- install
+curl -fsSL https://raw.githubusercontent.com/chikacya/nowhere-sh/main/nowhere-vps.sh | sudo bash -s -- install-legacy
 ```
 
-安装过程会询问端口、密钥、域名/IP、证书路径等参数。完成后，终端会打印 Anywhere 可导入的链接。
+安装 v1.5 Native Vector 模式时，将最后的 `install-legacy` 改为 `install-vector`。
+
+## 指定版本安装
+
+选择菜单 `5`，或者运行：
+
+```bash
+sudo bash nowhere-vps.sh versions
+```
+
+脚本会显示最近 10 个 Release，输入数字即可安装指定版本。v1.5 以前会自动进入
+Anywhere 兼容向导，v1.5 及以后会自动进入 Native Vector 向导。选定版本会保存到
+`/etc/nowhere/nowhere.env`，以后修改配置和打印链接都会沿用正确协议。
 
 ## 推荐部署方式
 
@@ -101,7 +129,7 @@ sudo bash nowhere-vps.sh install --yes
 sudo bash nowhere-vps.sh fingerprint
 ```
 
-或者进入菜单选择 `11`。
+或者进入菜单选择 `12`。
 
 脚本会优先读取 Nowhere `v1.2.5+` 日志中的 `CERT_SHA256|...` 字段；如果没有读到，再回退到本机 TLS 探测或旧日志匹配。
 
@@ -109,15 +137,16 @@ sudo bash nowhere-vps.sh fingerprint
 
 ## 安装向导
 
-选择菜单 `1` 或执行 `sudo bash nowhere-vps.sh install` 会进入交互向导。每一步都会显示默认值：
+选择菜单 `1` 或 `2` 会进入对应的交互向导。每一步都会显示默认值：
 
 ```text
-公网域名/IP，用于 Anywhere 导入链接 [1.2.3.4]:
+公网域名/IP，用于客户端连接 [1.2.3.4]:
 监听地址，留空表示 IPv4/IPv6 全部监听:
 监听端口 [2077]:
 Shared Key [随机值]:
-Spec Seed [随机值]:
+Spec Seed [随机值]:                         # 仅 Anywhere 模式
 监听模式 mix/tcp/udp [mix]:
+Vector 本地 SOCKS5 监听地址 [127.0.0.1:1080]: # 仅 Vector 模式
 ```
 
 如果不想自定义，全部按回车即可。最后脚本会显示配置摘要，再次回车确认应用。
@@ -153,7 +182,7 @@ user:pass@[2001:db8::10]:1080
 
 ```bash
 sudo bash nowhere-vps.sh configure
-sudo bash nowhere-vps.sh update
+sudo bash nowhere-vps.sh versions
 sudo bash nowhere-vps.sh start
 sudo bash nowhere-vps.sh stop
 sudo bash nowhere-vps.sh restart
@@ -166,10 +195,11 @@ sudo bash nowhere-vps.sh uninstall
 
 常用命令说明：
 
-- `configure`：重新配置参数并重启服务。
-- `update`：下载最新 Nowhere release 并重启服务。
+- `configure`：修改当前协议模式配置并重启服务。
+- `versions`：列出最近 10 个 Release，安全切换版本和协议模式。
+- `update --version vX.Y.Z`：直接安装指定 Release，并使用对应协议模式。
 - `logs`：实时查看 systemd 日志。
-- `link`：重新打印 Anywhere 导入链接。
+- `link`：重新打印 Anywhere 或 Native Vector 客户端链接。
 - `fingerprint`：查看当前 `tls=1` 自签证书的 SHA-256 fingerprint。
 - `uninstall`：删除二进制和 systemd 服务，但保留 `/etc/nowhere` 配置目录，避免误删密钥。
 
@@ -179,11 +209,13 @@ sudo bash nowhere-vps.sh uninstall
 
 | 环境变量 | 命令行参数 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `NOWHERE_PUBLIC_HOST` | `--public-host` | 自动探测 | Anywhere 导入链接中的域名或公网 IP |
+| `NOWHERE_PROTOCOL` | `--protocol` | `legacy` | `legacy` 为 Anywhere，`vector` 为 v1.5+ Native Vector |
+| `NOWHERE_VERSION` | `--version` | 按模式 | Release 标签，例如 `v1.4.0` 或 `v1.5.0` |
+| `NOWHERE_PUBLIC_HOST` | `--public-host` | 自动探测 | 客户端链接中的域名或公网 IP |
 | `NOWHERE_LISTEN_HOST` | `--listen-host` | 空 | 监听地址；空表示 IPv4/IPv6 wildcard |
 | `NOWHERE_PORT` | `--port` | `2077` | Portal 监听端口 |
 | `NOWHERE_KEY` | `--key` | 随机生成 | Nowhere shared key |
-| `NOWHERE_SPEC` | `--spec` | 随机生成 | Nowhere spec seed |
+| `NOWHERE_SPEC` | `--spec` | 随机生成 | 旧协议 seed；v1.5+ 已删除并禁止使用 |
 | `NOWHERE_NET` | `--net` | `mix` | `mix`、`tcp`、`udp` |
 | `NOWHERE_TLS` | `--tls` | `1` | `1` 自签临时证书，`2` PEM 证书 |
 | `NOWHERE_CRT` | `--crt` | 空 | `tls=2` 的证书链路径 |
@@ -194,7 +226,9 @@ sudo bash nowhere-vps.sh uninstall
 | `NOWHERE_DIAL` | `--dial` | `auto` | 出站源 IP 或 `auto` |
 | `NOWHERE_SOCKS` | `--socks` | `none` | SOCKS5 出站上游 |
 | `NOWHERE_LOG` | `--log` | `info` | `none`、`debug`、`info`、`warn`、`error`、`event` |
-| `NOWHERE_POOL` | `--pool` | `5` | Anywhere `up=tcp&down=tcp` 导入链接的 TCP pool 大小 |
+| `NOWHERE_POOL` | `--pool` | `5` | Anywhere 范围 `0..9`，Native Vector 范围 `0..256` |
+| `NOWHERE_VECTOR_SOCKS` | `--vector-socks` | `127.0.0.1:1080` | Native Vector 本地 SOCKS5 入口 |
+| `NOWHERE_VECTOR_SNI` | `--sni` | `none` 或证书域名 | Native Vector 证书校验名称 |
 
 ## 防火墙
 
@@ -215,21 +249,23 @@ sudo firewall-cmd --reload
 
 如果 `NOWHERE_NET=tcp`，只需要开放 TCP。如果 `NOWHERE_NET=udp`，只需要开放 UDP。
 
-## Anywhere 导入
+## 客户端链接
+
+### Anywhere 模式
 
 安装完成后脚本会打印：
 
 - `nowhere://...`
 - `anywhere://add-proxy?link=...`
 
-Nowhere `v1.3.0+` 的 Anywhere 链接使用 `up=` 和 `down=`：
+Nowhere v1.3-v1.4 的 Anywhere 链接使用 `up=` 和 `down=`：
 
 - `up=udp&down=udp`：QUIC/UDP，UDP 可通时推荐使用。
 - `up=tcp&down=tcp`：TLS/TCP fallback，带配置的 TCP pool。
 - `up=tcp&down=udp` 和 `up=udp&down=tcp`：非对称 carrier 链接，只会在
   `NOWHERE_NET=mix` 且未配置 SOCKS5 上游时打印。
 
-旧的客户端 `net=` 参数仍属于 Anywhere legacy import；本脚本新生成的链接会直接使用 `up=` / `down=`。
+v1.2.x 会自动生成旧的 `net=` 参数，v1.3-v1.4 会生成 `up=` / `down=`。
 
 在 iPhone、iPad 或 Apple TV 上，可以复制 `nowhere://` 链接到 Anywhere 中导入；如果系统能识别 Anywhere deep link，也可以直接打开对应的 `anywhere://add-proxy?link=...`。
 
@@ -238,6 +274,18 @@ Nowhere `v1.3.0+` 的 Anywhere 链接使用 `up=` 和 `down=`：
 ```bash
 sudo bash nowhere-vps.sh link
 ```
+
+### Native Vector 模式
+
+v1.5+ 会输出 `vector://` URL 和客户端启动命令，例如：
+
+```bash
+nowhere 'vector://shared-key@relay.example:2077?up=udp&down=udp&sni=relay.example&socks=127.0.0.1%3A1080'
+```
+
+在客户端设备安装兼容的 v1.5+ Nowhere 二进制并执行该命令，然后让应用连接本地
+SOCKS5 端口。`tls=1` 默认使用 `sni=none`，即不校验证书；正式使用建议配置
+`tls=2` 的可信证书，并设置明确的域名 SNI。
 
 ## 配置文件位置
 

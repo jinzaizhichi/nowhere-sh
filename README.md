@@ -2,12 +2,12 @@
 
 [简体中文](README.zh-CN.md)
 
-A one-click Linux VPS deployment script for Nowhere Portal, designed for use
-with the Anywhere client.
+A one-click Linux VPS deployment script for Nowhere Portal. It supports both
+the legacy Anywhere-compatible protocol and the new Native Vector protocol
+introduced in Nowhere v1.5.
 
-The script downloads the latest Linux release from `NodePassProject/Nowhere`,
-installs the binary, creates a systemd service, and prints both a `nowhere://`
-import URI and an `anywhere://add-proxy?link=...` deep link.
+The script installs an explicit release version, creates a systemd service,
+and prints the correct client URL for the selected protocol generation.
 
 ## Features
 
@@ -19,7 +19,24 @@ import URI and an `anywhere://add-proxy?link=...` deep link.
 - Supports `tls=1` ephemeral self-signed certificates and `tls=2` PEM certificates.
 - Supports rate limits, outbound source address, log level, and Anywhere TCP pool.
 - Supports Nowhere `v1.2.4+` SOCKS5 outbound upstream via `socks`.
-- Supports Nowhere `v1.3.0+` Anywhere `up=` / `down=` carrier import links.
+- Lists the 10 most recent GitHub Releases for numeric version selection.
+- Supports Anywhere links for v1.4 and earlier, including version-aware `net=`
+  and `up=` / `down=` parameters.
+- Supports v1.5+ Native Vector URLs with `sni`, local SOCKS5 ingress, split
+  carriers, and a TCP pool up to 256.
+
+## Protocol Compatibility
+
+Nowhere v1.5 uses a new wire protocol and is not compatible with the current
+Anywhere client. Choose the mode that matches your client:
+
+| Mode | Portal version | Client | Client URL |
+| --- | --- | --- | --- |
+| Anywhere compatible | v1.4.0 and earlier | Anywhere | `nowhere://...` |
+| Native Vector | v1.5.0 and later | Same-version Nowhere binary | `vector://...` |
+
+The default Anywhere entry installs v1.4.0. The default Native Vector entry
+installs v1.5.0. Portal and Native Vector must use compatible protocol versions.
 
 ## Requirements
 
@@ -40,30 +57,45 @@ sudo bash nowhere-vps.sh
 Running the script without arguments opens the interactive menu:
 
 ```text
-1) Install/Reinstall (wizard; press Enter to use defaults)
-2) Quick default install (no prompts)
-3) Reconfigure (wizard)
-4) Update Nowhere binary
-5) Start service
-6) Stop service
-7) Restart service
-8) Show status
-9) Show logs
-10) Print Anywhere import links
-11) Show tls=1 self-signed certificate SHA-256
-12) Uninstall service
+1) Install/Reinstall Anywhere-compatible v1.4.0
+2) Install/Reinstall Native Vector v1.5.0
+3) Quick default Anywhere-compatible install
+4) Reconfigure the current protocol mode
+5) Select and install one of the 10 most recent Releases
+6) Start service
+7) Stop service
+8) Restart service
+9) Show status
+10) Show logs
+11) Print client URLs/commands
+12) Show tls=1 self-signed certificate SHA-256
+13) Uninstall service
 0) Exit
 ```
 
-For first-time use, choose `1` and press Enter through the wizard to accept the defaults.
+Choose `1` for Anywhere or `2` for Native Vector, then press Enter through the
+wizard to accept the defaults.
 
 One-line install is also supported:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chikacya/nowhere-sh/main/nowhere-vps.sh | sudo bash -s -- install
+curl -fsSL https://raw.githubusercontent.com/chikacya/nowhere-sh/main/nowhere-vps.sh | sudo bash -s -- install-legacy
 ```
 
-The installer asks for port, shared key, domain/IP, certificate paths, and other options. At the end it prints import links for Anywhere.
+Use `install-vector` instead to install the v1.5 Native Vector mode.
+
+## Release Selection
+
+Choose menu item `5`, or run:
+
+```bash
+sudo bash nowhere-vps.sh versions
+```
+
+The script queries GitHub and shows the 10 most recent releases. Enter a number
+to install that exact version. Versions before v1.5 automatically use the
+Anywhere-compatible wizard; v1.5 and later automatically use the Native Vector
+wizard. The selected version is saved in `/etc/nowhere/nowhere.env`.
 
 ## Recommended Deployment
 
@@ -105,7 +137,7 @@ You can also print it manually:
 sudo bash nowhere-vps.sh fingerprint
 ```
 
-Or choose menu item `11`.
+Or choose menu item `12`.
 
 The script first reads the `CERT_SHA256|...` log field introduced in Nowhere
 `v1.2.5+`. If that is not available, it falls back to local TLS probing or older
@@ -117,16 +149,17 @@ certificate.
 
 ## Installer Wizard
 
-Choosing menu item `1` or running `sudo bash nowhere-vps.sh install` starts the
-interactive wizard. Every prompt has a default value:
+Choosing menu item `1` or `2` starts the corresponding interactive wizard.
+Every prompt has a default value:
 
 ```text
-Public domain/IP for Anywhere import links [1.2.3.4]:
+Public domain/IP for client connections [1.2.3.4]:
 Listen address, empty means IPv4/IPv6 wildcard:
 Listen port [2077]:
 Shared Key [random value]:
-Spec Seed [random value]:
+Spec Seed [random value]:              # Anywhere mode only
 Listener mode mix/tcp/udp [mix]:
+Vector local SOCKS5 listener [127.0.0.1:1080]:  # Vector mode only
 ```
 
 If you do not want to customize anything, press Enter through all prompts. The
@@ -167,7 +200,7 @@ client perspective, Anywhere still connects only to your Nowhere Portal.
 
 ```bash
 sudo bash nowhere-vps.sh configure
-sudo bash nowhere-vps.sh update
+sudo bash nowhere-vps.sh versions
 sudo bash nowhere-vps.sh start
 sudo bash nowhere-vps.sh stop
 sudo bash nowhere-vps.sh restart
@@ -180,10 +213,11 @@ sudo bash nowhere-vps.sh uninstall
 
 Command notes:
 
-- `configure`: edit configuration and restart the service if enabled.
-- `update`: download the latest Nowhere release and restart the service.
+- `configure`: edit the current protocol mode and restart the service if enabled.
+- `versions`: list the 10 most recent releases and safely switch version and mode.
+- `update --version vX.Y.Z`: install one explicit release and use its matching mode.
 - `logs`: follow systemd logs.
-- `link`: print Anywhere import links again.
+- `link`: print Anywhere links or Native Vector URLs again.
 - `fingerprint`: print the current `tls=1` self-signed certificate SHA-256 fingerprint.
 - `uninstall`: remove the binary and systemd service, but keep `/etc/nowhere` so keys are not deleted accidentally.
 
@@ -194,11 +228,13 @@ as command-line flags.
 
 | Environment variable | CLI flag | Default | Description |
 | --- | --- | --- | --- |
-| `NOWHERE_PUBLIC_HOST` | `--public-host` | auto-detected | Domain or public IP used in Anywhere import links |
+| `NOWHERE_PROTOCOL` | `--protocol` | `legacy` | `legacy` for Anywhere or `vector` for v1.5+ Native Vector |
+| `NOWHERE_VERSION` | `--version` | mode-dependent | Exact release tag, such as `v1.4.0` or `v1.5.0` |
+| `NOWHERE_PUBLIC_HOST` | `--public-host` | auto-detected | Domain or public IP used in generated client URLs |
 | `NOWHERE_LISTEN_HOST` | `--listen-host` | empty | Listen address; empty means IPv4/IPv6 wildcard |
 | `NOWHERE_PORT` | `--port` | `2077` | Portal listen port |
 | `NOWHERE_KEY` | `--key` | random | Nowhere shared key |
-| `NOWHERE_SPEC` | `--spec` | random | Nowhere spec seed |
+| `NOWHERE_SPEC` | `--spec` | random | Legacy protocol seed; removed and rejected in v1.5+ mode |
 | `NOWHERE_NET` | `--net` | `mix` | `mix`, `tcp`, or `udp` |
 | `NOWHERE_TLS` | `--tls` | `1` | `1` ephemeral self-signed cert, `2` PEM cert |
 | `NOWHERE_CRT` | `--crt` | empty | Certificate chain path for `tls=2` |
@@ -209,7 +245,9 @@ as command-line flags.
 | `NOWHERE_DIAL` | `--dial` | `auto` | Outbound source IP or `auto` |
 | `NOWHERE_SOCKS` | `--socks` | `none` | SOCKS5 outbound upstream |
 | `NOWHERE_LOG` | `--log` | `info` | `none`, `debug`, `info`, `warn`, `error`, or `event` |
-| `NOWHERE_POOL` | `--pool` | `5` | TCP pool size used in Anywhere `up=tcp&down=tcp` import links |
+| `NOWHERE_POOL` | `--pool` | `5` | TCP pool: Anywhere `0..9`, Native Vector `0..256` |
+| `NOWHERE_VECTOR_SOCKS` | `--vector-socks` | `127.0.0.1:1080` | Native Vector local SOCKS5 ingress listener |
+| `NOWHERE_VECTOR_SNI` | `--sni` | `none` or TLS domain | Native Vector certificate verification name |
 
 ## Firewall
 
@@ -230,14 +268,16 @@ sudo firewall-cmd --reload
 
 If `NOWHERE_NET=tcp`, open TCP only. If `NOWHERE_NET=udp`, open UDP only.
 
-## Import Into Anywhere
+## Client URLs
+
+### Anywhere Mode
 
 After installation, the script prints:
 
 - `nowhere://...`
 - `anywhere://add-proxy?link=...`
 
-For Nowhere `v1.3.0+`, the generated Anywhere links use `up=` and `down=`:
+For Nowhere v1.3-v1.4, the generated Anywhere links use `up=` and `down=`:
 
 - `up=udp&down=udp`: QUIC/UDP, recommended when UDP is reachable.
 - `up=tcp&down=tcp`: TLS/TCP fallback with the configured TCP pool.
@@ -245,7 +285,8 @@ For Nowhere `v1.3.0+`, the generated Anywhere links use `up=` and `down=`:
   only for `NOWHERE_NET=mix` without a SOCKS5 upstream.
 
 The old `net=` client import parameter is still treated as legacy by Anywhere,
-but new links generated by this script use `up=` / `down=` directly.
+and is generated automatically for v1.2.x. Releases v1.3-v1.4 use `up=` and
+`down=` directly.
 
 On iPhone, iPad, or Apple TV, copy a `nowhere://` link into Anywhere. If your
 system recognizes Anywhere deep links, you can open the corresponding
@@ -256,6 +297,19 @@ If you forgot to save the link, run this on the VPS:
 ```bash
 sudo bash nowhere-vps.sh link
 ```
+
+### Native Vector Mode
+
+For v1.5+, the script prints one or more `vector://` URLs and a command such as:
+
+```bash
+nowhere 'vector://shared-key@relay.example:2077?up=udp&down=udp&sni=relay.example&socks=127.0.0.1%3A1080'
+```
+
+Run this on the client device with a matching v1.5+ Nowhere binary, then point
+applications at the local SOCKS5 listener. `sni=none` disables certificate
+verification and is the default for `tls=1`; use a CA-trusted certificate and
+an explicit DNS SNI for production.
 
 ## File Locations
 
