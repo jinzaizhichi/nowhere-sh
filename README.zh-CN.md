@@ -14,21 +14,21 @@ Linux VPS 一键部署和管理脚本。
 - 自动创建和管理 systemd 服务。
 - 支持 `mix`、`tcp`、`udp`、TLS、限速、SOCKS5 上游和日志配置。
 - 输出 Anywhere 2.0 的 `nowhere://` 链接和 Native Vector 的 `vector://` URL。
+- 可从管理菜单打开 Nowhere v1.6+ 的只读 Terminal UI。
 - 输出 `tls=1` 临时自签证书的 SHA-256 fingerprint。
-- 保留 Nowhere v1.4 及更早版本的安装入口。
 
 ## 兼容性
 
-Nowhere v1.5 更换了线协议并删除 `spec`，**Anywhere 2.0 已支持这个新版协议**。
+本脚本支持 Nowhere v1.5 及以后版本，**Anywhere 2.0 已支持该协议**。
+Nowhere v1.6 增加本地遥测和 TUI，但没有修改 v1 线协议。
 
 | Portal 版本 | 客户端 | 链接 | 说明 |
 | --- | --- | --- | --- |
-| v1.5+ | Anywhere 2.0 | `nowhere://...` | 不含 `spec`，pool 为 `0..9` |
+| v1.5+ | Anywhere 2.0 | `nowhere://...` | pool 为 `0..9` |
 | v1.5+ | Native Vector | `vector://...` | 本地 SOCKS5 客户端，pool 为 `0..256` |
-| v1.4 及更早 | Anywhere 1.x/兼容版本 | `nowhere://...` | 旧链接包含 `spec` |
 
-服务端协议代际和客户端类型现在分开选择。同一个 v1.5+ Portal 可以根据需要输出
-Anywhere 2.0 或 Native Vector 的客户端配置。
+同一个 v1.5+ Portal 可以根据需要输出 Anywhere 2.0 或 Native Vector 的客户端配置；
+脚本不再提供 v1.5 以前版本。
 
 ## 快速安装
 
@@ -40,20 +40,20 @@ chmod +x nowhere-vps.sh
 sudo bash nowhere-vps.sh
 ```
 
-默认入口会安装 Nowhere v1.5.1，并输出 Anywhere 2.0 链接：
+默认入口会安装 Nowhere v1.6.0，并输出 Anywhere 2.0 链接：
 
 ```text
-1) 安装/重装新版（Anywhere 2.0，v1.5.1）
-2) 安装/重装新版（Native Vector，v1.5.1）
-3) 快速默认安装（Anywhere 2.0，v1.5.1）
-4) 修改当前协议模式配置（向导）
-5) 指定 Release 安装/切换（最近 10 个版本）
-6) 更新 Nowhere 二进制（保留当前配置）
-7) 安装/重装旧版（Anywhere 1.x，v1.4.0）
-8) 启动服务
-9) 停止服务
-10) 重启服务
-11) 查看状态
+1) 安装/重装（Anywhere）
+2) 安装/重装（Native Vector）
+3) 快速默认安装（Anywhere）
+4) 修改配置（向导）
+5) 指定 Release 安装/切换
+6) 更新 Nowhere 二进制
+7) 启动服务
+8) 停止服务
+9) 重启服务
+10) 查看状态
+11) 打开 Terminal UI（只读监控）
 12) 查看日志
 13) 打印客户端链接/命令
 14) 查看 tls=1 自签证书 SHA-256
@@ -67,7 +67,7 @@ sudo bash nowhere-vps.sh
 curl -fsSL https://raw.githubusercontent.com/chikacya/nowhere-sh/main/nowhere-vps.sh | sudo bash -s -- install-anywhere --yes
 ```
 
-Native Vector 使用 `install-vector`，旧版 v1.4.0 使用 `install-legacy`。
+Native Vector 使用 `install-vector`。
 
 ## 更新二进制
 
@@ -76,13 +76,26 @@ Native Vector 使用 `install-vector`，旧版 v1.4.0 使用 `install-legacy`。
 
 ```bash
 sudo bash nowhere-vps.sh update
-sudo bash nowhere-vps.sh update --version v1.5.1
+sudo bash nowhere-vps.sh update --version v1.6.0
 ```
 
-如果升级或降级跨越 v1.5 协议边界，脚本会自动进入迁移向导，因为配置需要增加或
-删除 `spec`。同一协议代际内更新不会重新询问全部参数。
-
 菜单 `5` 是完整的指定版本安装/切换，会进入配置向导。
+
+## Terminal UI
+
+Nowhere v1.6.0 新增只读监控面板，可以查看 Portal/Vector 流量、连接、carrier、
+连接池、CPU/RSS，以及独立的 Access 和 Runtime 日志。选择菜单 `11`，或者运行：
+
+```bash
+sudo bash nowhere-vps.sh tui
+```
+
+Portal 仍由 systemd 在后台运行；按 `q` 退出面板不会停止或修改服务。使用 root 运行
+可以发现同一 Linux PID 和网络命名空间中由 root 启动的服务。容器内实例需要在同一
+容器中打开 TUI 才能看到。
+
+`NOW_TELEMETRY_INTERVAL` 独立控制遥测快照间隔，默认 `1s`，范围为
+`250ms..60s`。
 
 ## 客户端选择
 
@@ -140,6 +153,7 @@ sudo bash nowhere-vps.sh start
 sudo bash nowhere-vps.sh stop
 sudo bash nowhere-vps.sh restart
 sudo bash nowhere-vps.sh status
+sudo bash nowhere-vps.sh tui
 sudo bash nowhere-vps.sh logs
 sudo bash nowhere-vps.sh link
 sudo bash nowhere-vps.sh fingerprint
@@ -150,19 +164,18 @@ sudo bash nowhere-vps.sh uninstall
 
 | 环境变量 | 命令行参数 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `NOWHERE_VERSION` | `--version` | `v1.5.1` | 指定 Release |
-| `NOWHERE_PROTOCOL` | `--protocol` | `modern` | v1.5+ 为 `modern`，更早为 `legacy` |
+| `NOWHERE_VERSION` | `--version` | `v1.6.0` | 指定 Release |
 | `NOWHERE_CLIENT` | `--client` | `anywhere` | `anywhere`、`vector` 或 `both` |
 | `NOWHERE_PUBLIC_HOST` | `--public-host` | 自动探测 | 公网域名或 IP |
 | `NOWHERE_PORT` | `--port` | `2077` | Portal 端口 |
 | `NOWHERE_KEY` | `--key` | 随机 | Shared key |
-| `NOWHERE_SPEC` | `--spec` | 旧版随机 | v1.5+ 已删除 |
 | `NOWHERE_NET` | `--net` | `mix` | `mix`、`tcp` 或 `udp` |
 | `NOWHERE_TLS` | `--tls` | `1` | `1` 自签，`2` PEM |
 | `NOWHERE_POOL` | `--pool` | `5` | Anywhere `0..9`，Vector `0..256` |
 | `NOWHERE_VECTOR_SOCKS` | `--vector-socks` | `127.0.0.1:1080` | Vector 本地 SOCKS5 入口 |
 | `NOWHERE_VECTOR_SNI` | `--sni` | `none` | Vector TLS 校验名称 |
 | `NOWHERE_VECTOR_PIN` | `--pin` | `none` | v1.5.1+ 小写证书 SHA-256 pin |
+| `NOWHERE_TELEMETRY_INTERVAL` / `NOW_TELEMETRY_INTERVAL` | `--telemetry-interval` | `1s` | v1.6+ TUI 快照间隔，`250ms..60s` |
 
 完整参数请运行：
 

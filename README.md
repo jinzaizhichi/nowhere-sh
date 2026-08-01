@@ -15,22 +15,22 @@ Linux VPS.
 - Creates and manages a systemd service.
 - Supports `mix`, `tcp`, and `udp`, TLS modes, rate limits, SOCKS5 upstream, and logs.
 - Generates Anywhere 2.0 `nowhere://` links and Native Vector `vector://` URLs.
+- Opens the Nowhere v1.6+ read-only Terminal UI from the management menu.
 - Prints the SHA-256 fingerprint of an ephemeral `tls=1` certificate.
-- Keeps legacy Nowhere v1.4 and earlier installations available.
 
 ## Compatibility
 
-Nowhere v1.5 introduced a new wire protocol and removed `spec`. Anywhere 2.0
-supports that new protocol.
+This script supports Nowhere v1.5 and later, which Anywhere 2.0 supports.
+Nowhere v1.6 adds local telemetry and the TUI without changing the v1 wire
+protocol.
 
 | Portal release | Client | URL | Notes |
 | --- | --- | --- | --- |
-| v1.5+ | Anywhere 2.0 | `nowhere://...` | No `spec`; pool is `0..9` |
+| v1.5+ | Anywhere 2.0 | `nowhere://...` | Pool is `0..9` |
 | v1.5+ | Native Vector | `vector://...` | Local SOCKS5 client; pool is `0..256` |
-| v1.4 and earlier | Anywhere 1.x/compatible | `nowhere://...` | Legacy URL includes `spec` |
 
-The server protocol generation and client type are separate choices. A v1.5+
-Portal can serve Anywhere 2.0 or Native Vector clients using the matching URL.
+A v1.5+ Portal can serve Anywhere 2.0 or Native Vector clients using the
+matching URL. Releases before v1.5 are intentionally not offered.
 
 ## Requirements
 
@@ -46,21 +46,21 @@ chmod +x nowhere-vps.sh
 sudo bash nowhere-vps.sh
 ```
 
-The default menu entry installs Nowhere v1.5.1 for Anywhere 2.0. Press Enter at
+The default menu entry installs Nowhere v1.6.0 for Anywhere 2.0. Press Enter at
 every wizard prompt to accept the defaults.
 
 ```text
-1) Install/Reinstall v1.5.1 for Anywhere 2.0
-2) Install/Reinstall v1.5.1 for Native Vector
-3) Quick default install for Anywhere 2.0
-4) Reconfigure the current installation
-5) Select and install one of the 10 latest releases
-6) Update Nowhere binary and preserve configuration
-7) Install/Reinstall legacy v1.4.0 for Anywhere 1.x
-8) Start service
-9) Stop service
-10) Restart service
-11) Show status
+1) Install/Reinstall (Anywhere)
+2) Install/Reinstall (Native Vector)
+3) Quick default install (Anywhere)
+4) Reconfigure
+5) Select and install a Release
+6) Update Nowhere binary
+7) Start service
+8) Stop service
+9) Restart service
+10) Show status
+11) Open read-only Terminal UI
 12) Follow logs
 13) Print client URLs
 14) Show tls=1 certificate SHA-256
@@ -74,7 +74,7 @@ Non-interactive default installation:
 curl -fsSL https://raw.githubusercontent.com/chikacya/nowhere-sh/main/nowhere-vps.sh | sudo bash -s -- install-anywhere --yes
 ```
 
-Use `install-vector` for Native Vector, or `install-legacy` for Nowhere v1.4.0.
+Use `install-vector` for Native Vector.
 
 ## Updating Nowhere
 
@@ -83,15 +83,29 @@ selected binary, preserves `/etc/nowhere/nowhere.env`, and restarts the service.
 
 ```bash
 sudo bash nowhere-vps.sh update
-sudo bash nowhere-vps.sh update --version v1.5.1
+sudo bash nowhere-vps.sh update --version v1.6.0
 ```
-
-When an update crosses the v1.5 protocol boundary, the script opens the
-migration wizard because `spec` must be added or removed. Updates within the
-same protocol generation do not rerun the configuration wizard.
 
 Menu item `5` is for a full release install or switch and always opens the
 configuration wizard.
+
+## Terminal UI
+
+Nowhere v1.6.0 provides a read-only dashboard for Portal and Vector traffic,
+connections, carriers, pools, CPU/RSS, and separate Access and Runtime logs.
+Open it from menu item `11` or run:
+
+```bash
+sudo bash nowhere-vps.sh tui
+```
+
+The Portal continues running under systemd. Closing the dashboard with `q` does
+not stop or reconfigure it. Run the dashboard as root to discover the root-owned
+systemd service in the same Linux PID and network namespaces. Containers remain
+isolated unless the dashboard runs inside the same container.
+
+`NOW_TELEMETRY_INTERVAL` controls snapshots independently of text logs. The
+script default is `1s`; accepted values range from `250ms` to `60s`.
 
 ## Client Selection
 
@@ -150,6 +164,7 @@ sudo bash nowhere-vps.sh start
 sudo bash nowhere-vps.sh stop
 sudo bash nowhere-vps.sh restart
 sudo bash nowhere-vps.sh status
+sudo bash nowhere-vps.sh tui
 sudo bash nowhere-vps.sh logs
 sudo bash nowhere-vps.sh link
 sudo bash nowhere-vps.sh fingerprint
@@ -160,19 +175,18 @@ Important options:
 
 | Environment variable | CLI option | Default | Description |
 | --- | --- | --- | --- |
-| `NOWHERE_VERSION` | `--version` | `v1.5.1` | Exact release tag |
-| `NOWHERE_PROTOCOL` | `--protocol` | `modern` | `modern` for v1.5+, `legacy` for earlier releases |
+| `NOWHERE_VERSION` | `--version` | `v1.6.0` | Exact release tag |
 | `NOWHERE_CLIENT` | `--client` | `anywhere` | `anywhere`, `vector`, or `both` |
 | `NOWHERE_PUBLIC_HOST` | `--public-host` | auto | Public domain or IP |
 | `NOWHERE_PORT` | `--port` | `2077` | Portal port |
 | `NOWHERE_KEY` | `--key` | random | Shared key |
-| `NOWHERE_SPEC` | `--spec` | random for legacy | Removed in v1.5+ |
 | `NOWHERE_NET` | `--net` | `mix` | `mix`, `tcp`, or `udp` |
 | `NOWHERE_TLS` | `--tls` | `1` | `1` self-signed, `2` PEM |
 | `NOWHERE_POOL` | `--pool` | `5` | Anywhere `0..9`, Vector `0..256` |
 | `NOWHERE_VECTOR_SOCKS` | `--vector-socks` | `127.0.0.1:1080` | Vector local SOCKS5 listener |
 | `NOWHERE_VECTOR_SNI` | `--sni` | `none` | Vector TLS verification name |
 | `NOWHERE_VECTOR_PIN` | `--pin` | `none` | v1.5.1+ lowercase certificate SHA-256 pin |
+| `NOWHERE_TELEMETRY_INTERVAL` / `NOW_TELEMETRY_INTERVAL` | `--telemetry-interval` | `1s` | v1.6+ TUI snapshot interval, `250ms..60s` |
 
 Run `bash nowhere-vps.sh --help` for the complete option list.
 

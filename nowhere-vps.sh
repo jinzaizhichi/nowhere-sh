@@ -14,11 +14,10 @@ DEFAULT_ALPN="now/1"
 DEFAULT_LOG="info"
 DEFAULT_POOL="5"
 DEFAULT_SOCKS="none"
-DEFAULT_PROTOCOL="modern"
 DEFAULT_CLIENT="anywhere"
-DEFAULT_LEGACY_VERSION="v1.4.0"
-DEFAULT_MODERN_VERSION="v1.5.1"
+DEFAULT_MODERN_VERSION="v1.6.0"
 DEFAULT_VECTOR_VERSION="$DEFAULT_MODERN_VERSION"
+DEFAULT_TELEMETRY_INTERVAL="1s"
 DEFAULT_VECTOR_SOCKS="127.0.0.1:1080"
 DEFAULT_VECTOR_SNI="none"
 DEFAULT_VECTOR_PIN="none"
@@ -42,14 +41,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --key)
       NOWHERE_KEY="${2:?missing --key value}"
-      shift 2
-      ;;
-    --spec)
-      NOWHERE_SPEC="${2:?missing --spec value}"
-      shift 2
-      ;;
-    --protocol)
-      NOWHERE_PROTOCOL="${2:?missing --protocol value}"
       shift 2
       ;;
     --client)
@@ -125,6 +116,10 @@ while [[ $# -gt 0 ]]; do
       NOWHERE_VECTOR_PIN="${2:?missing --pin value}"
       shift 2
       ;;
+    --telemetry-interval)
+      NOWHERE_TELEMETRY_INTERVAL="${2:?missing --telemetry-interval value}"
+      shift 2
+      ;;
     -h|--help)
       ACTION="help"
       shift
@@ -146,12 +141,12 @@ Nowhere VPS 一键部署脚本。
 
 Usage:
   sudo bash nowhere-vps.sh
-  sudo bash nowhere-vps.sh install|install-anywhere|install-legacy [--yes] [options]
+  sudo bash nowhere-vps.sh install|install-anywhere [--yes] [options]
   sudo bash nowhere-vps.sh install-vector [--yes] [options]
   sudo bash nowhere-vps.sh configure [options]
-  sudo bash nowhere-vps.sh update [--version v1.5.1]
+  sudo bash nowhere-vps.sh update [--version v1.6.0]
   sudo bash nowhere-vps.sh versions
-  sudo bash nowhere-vps.sh start|stop|restart|status|logs|link
+  sudo bash nowhere-vps.sh start|stop|restart|status|tui|logs|link
   sudo bash nowhere-vps.sh fingerprint
   sudo bash nowhere-vps.sh uninstall
 
@@ -159,12 +154,10 @@ No arguments opens the interactive menu. Press Enter in the installer wizard to
 keep every default value.
 
 Options:
-  --protocol legacy|modern  Server protocol generation; selected automatically by version
   --client anywhere|vector|both  Client links to print for v1.5+
-  --version v1.5.1         Exact GitHub Release version to install
+  --version v1.6.0         Exact GitHub Release version to install
   --port 2077              Portal listen port
   --key secret             Shared key
-  --spec nightfall         Optional protocol spec seed
   --net mix|tcp|udp        Server listener transport
   --tls 1|2                1=self-signed, 2=PEM certificate
   --crt /path/cert.pem     PEM certificate chain for tls=2
@@ -181,6 +174,7 @@ Options:
   --vector-socks addr      Native Vector local SOCKS5 listener
   --sni name|none          Native Vector certificate verification name
   --pin sha256|none        Native Vector lowercase leaf certificate SHA-256 pin
+  --telemetry-interval 1s  TUI snapshot interval for v1.6+ (250ms..60s)
 
 Environment variables with the same names are also supported, for example:
   NOWHERE_PORT=443 NOWHERE_NET=mix sudo -E bash nowhere-vps.sh install-anywhere --yes
@@ -384,16 +378,12 @@ confirm_default_yes() {
 print_config_summary() {
   echo
   echo "配置确认："
-  echo "  协议模式:          $(protocol_label "${NOWHERE_PROTOCOL:-legacy}")"
   echo "  客户端输出:        $(client_label "${NOWHERE_CLIENT:-anywhere}")"
   echo "  Release:           ${NOWHERE_VERSION:-}"
   echo "  公网域名/IP:       $(display_empty "${NOWHERE_PUBLIC_HOST:-}" "<自动探测失败，稍后可重新配置>")"
   echo "  监听地址:          $(display_empty "${NOWHERE_LISTEN_HOST:-}" "<空，IPv4/IPv6 wildcard>")"
   echo "  监听端口:          ${NOWHERE_PORT:-}"
   echo "  Shared Key:        $(mask_secret "${NOWHERE_KEY:-}")"
-  if [[ "${NOWHERE_PROTOCOL:-legacy}" == "legacy" ]]; then
-    echo "  Spec:              $(mask_secret "${NOWHERE_SPEC:-}")"
-  fi
   echo "  Net:               ${NOWHERE_NET:-}"
   echo "  TLS:               ${NOWHERE_TLS:-}"
   if [[ "${NOWHERE_TLS:-}" == "2" ]]; then
@@ -405,6 +395,7 @@ print_config_summary() {
   echo "  Dial:              ${NOWHERE_DIAL:-auto}"
   echo "  SOCKS5 出站:       $(display_socks "${NOWHERE_SOCKS:-none}")"
   echo "  Log:               ${NOWHERE_LOG:-}"
+  echo "  TUI 遥测间隔:      ${NOWHERE_TELEMETRY_INTERVAL:-$DEFAULT_TELEMETRY_INTERVAL}"
   echo "  TCP Pool:          ${NOWHERE_POOL:-}"
   if [[ "${NOWHERE_CLIENT:-anywhere}" == "vector" || "${NOWHERE_CLIENT:-anywhere}" == "both" ]]; then
     echo "  Vector SOCKS5:     ${NOWHERE_VECTOR_SOCKS:-}"
@@ -458,14 +449,6 @@ read_value() {
   fi
 }
 
-normalize_protocol() {
-  case "${1:-}" in
-    legacy|anywhere) printf 'legacy' ;;
-    vector|v15|modern) printf 'modern' ;;
-    *) return 1 ;;
-  esac
-}
-
 normalize_client() {
   case "${1:-}" in
     anywhere) printf 'anywhere' ;;
@@ -481,14 +464,6 @@ client_label() {
     vector) printf 'Native Vector' ;;
     both) printf 'Anywhere 2.0 + Native Vector' ;;
   esac
-}
-
-protocol_label() {
-  if [[ "${1:-legacy}" == "modern" ]]; then
-    printf 'Nowhere v1.5+ protocol'
-  else
-    printf 'Legacy protocol (v1.4 and earlier)'
-  fi
 }
 
 validate_release_version() {
@@ -508,27 +483,13 @@ version_at_least() {
   (( 10#$patch >= required_patch ))
 }
 
-protocol_for_version() {
-  if version_at_least "$1" 1 5 0; then
-    printf 'modern'
-  else
-    printf 'legacy'
-  fi
+require_supported_version() {
+  validate_release_version "$1" || die "Invalid release version: $1"
+  version_at_least "$1" 1 5 0 || die "Nowhere versions before v1.5 are no longer supported by this script."
 }
 
-default_version_for_protocol() {
-  if [[ "${1:-legacy}" == "modern" ]]; then
-    printf '%s' "$DEFAULT_MODERN_VERSION"
-  else
-    printf '%s' "$DEFAULT_LEGACY_VERSION"
-  fi
-}
-
-validate_version_protocol() {
-  local expected
-  validate_release_version "$NOWHERE_VERSION" || die "Invalid release version: ${NOWHERE_VERSION}"
-  expected="$(protocol_for_version "$NOWHERE_VERSION")"
-  [[ "$NOWHERE_PROTOCOL" == "$expected" ]] || die "${NOWHERE_VERSION} requires protocol=${expected}; current selection is ${NOWHERE_PROTOCOL}."
+validate_supported_version() {
+  require_supported_version "$NOWHERE_VERSION"
 }
 
 fetch_recent_releases() {
@@ -547,19 +508,20 @@ fetch_recent_releases() {
 }
 
 choose_release_version() {
-  local releases=() choice index release mode choice_number
+  local releases=() choice index release choice_number
   command -v curl >/dev/null 2>&1 || die "curl is required to query GitHub Releases."
   while IFS= read -r release; do
-    [[ -n "$release" ]] && releases+=("$release")
+    if [[ -n "$release" ]] && version_at_least "$release" 1 5 0; then
+      releases+=("$release")
+    fi
   done < <(fetch_recent_releases)
   [[ "${#releases[@]}" -gt 0 ]] || die "Could not read recent releases from GitHub."
 
   echo
-  echo "最近 ${#releases[@]} 个 Nowhere Release："
+  echo "最近 ${#releases[@]} 个受支持的 Nowhere Release："
   for index in "${!releases[@]}"; do
     release="${releases[$index]}"
-    mode="$(protocol_for_version "$release")"
-    printf ' %2d) %-12s %s\n' "$((index + 1))" "$release" "$(protocol_label "$mode")"
+    printf ' %2d) %s\n' "$((index + 1))" "$release"
   done
   echo "  0) 取消"
 
@@ -585,6 +547,21 @@ validate_port() {
 
 validate_nonnegative_int() {
   [[ "$1" =~ ^[0-9]+$ ]]
+}
+
+validate_telemetry_interval() {
+  local value="$1" amount
+  if [[ "$value" =~ ^([0-9]+)ms$ ]]; then
+    amount="${BASH_REMATCH[1]}"
+    [[ "${#amount}" -le 8 ]] || return 1
+    (( 10#$amount >= 250 && 10#$amount <= 60000 ))
+  elif [[ "$value" =~ ^([0-9]+)s$ ]]; then
+    amount="${BASH_REMATCH[1]}"
+    [[ "${#amount}" -le 8 ]] || return 1
+    (( 10#$amount >= 1 && 10#$amount <= 60 ))
+  else
+    return 1
+  fi
 }
 
 validate_socks() {
@@ -651,22 +628,15 @@ validate_config_values() {
   validate_port "$NOWHERE_PORT" || die "Invalid port: ${NOWHERE_PORT}"
   [[ -n "$NOWHERE_KEY" ]] || die "NOWHERE_KEY cannot be empty."
   [[ "${#NOWHERE_KEY}" -le 255 ]] || die "NOWHERE_KEY must be <= 255 characters."
-  if [[ "$NOWHERE_PROTOCOL" == "legacy" ]]; then
-    [[ -z "$NOWHERE_SPEC" || "${#NOWHERE_SPEC}" -le 255 ]] || die "NOWHERE_SPEC must be <= 255 characters."
-  else
-    [[ -z "$NOWHERE_SPEC" ]] || die "NOWHERE_SPEC was removed in Nowhere v1.5."
-  fi
   [[ -z "$NOWHERE_ALPN" || "${#NOWHERE_ALPN}" -le 255 ]] || die "NOWHERE_ALPN must be <= 255 characters."
   [[ "$NOWHERE_NET" == "mix" || "$NOWHERE_NET" == "tcp" || "$NOWHERE_NET" == "udp" ]] || die "NOWHERE_NET must be mix, tcp, or udp."
   [[ "$NOWHERE_TLS" == "1" || "$NOWHERE_TLS" == "2" ]] || die "NOWHERE_TLS must be 1 or 2."
   validate_nonnegative_int "$NOWHERE_RATE" || die "NOWHERE_RATE must be a non-negative integer."
   validate_nonnegative_int "$NOWHERE_ETAR" || die "NOWHERE_ETAR must be a non-negative integer."
   validate_socks "$NOWHERE_SOCKS" || die "NOWHERE_SOCKS must be none, host:port, or user:pass@host:port. IPv6 endpoints require brackets."
+  validate_telemetry_interval "$NOWHERE_TELEMETRY_INTERVAL" || die "NOWHERE_TELEMETRY_INTERVAL must be 250ms..60000ms or 1s..60s."
   [[ "$NOWHERE_LOG" == "none" || "$NOWHERE_LOG" == "debug" || "$NOWHERE_LOG" == "info" || "$NOWHERE_LOG" == "warn" || "$NOWHERE_LOG" == "error" || "$NOWHERE_LOG" == "event" ]] || die "Invalid log level: ${NOWHERE_LOG}"
   NOWHERE_CLIENT="$(normalize_client "$NOWHERE_CLIENT")" || die "NOWHERE_CLIENT must be anywhere, vector, or both."
-  if [[ "$NOWHERE_PROTOCOL" == "legacy" && "$NOWHERE_CLIENT" != "anywhere" ]]; then
-    die "Nowhere versions before v1.5 only support the Anywhere client output."
-  fi
   if [[ "$NOWHERE_CLIENT" != "anywhere" && "$NOWHERE_VECTOR_PIN" != "none" ]] && ! version_at_least "$NOWHERE_VERSION" 1 5 1; then
     die "NOWHERE_VECTOR_PIN requires Nowhere v1.5.1 or newer."
   fi
@@ -683,10 +653,7 @@ validate_config_values() {
       [[ "$NOWHERE_VECTOR_PIN" == "none" || "$NOWHERE_VECTOR_PIN" =~ ^[0-9a-f]{64}$ ]] || die "NOWHERE_VECTOR_PIN must be none or 64 lowercase hexadecimal characters."
     fi
   fi
-  validate_version_protocol
-  if [[ "$NOWHERE_PROTOCOL" == "legacy" ]] && ! version_at_least "$NOWHERE_VERSION" 1 2 4 && [[ "$NOWHERE_SOCKS" != "none" && -n "$NOWHERE_SOCKS" ]]; then
-    die "Portal outbound SOCKS5 requires Nowhere v1.2.4 or newer."
-  fi
+  validate_supported_version
   if [[ "$NOWHERE_TLS" == "2" ]]; then
     [[ -n "$NOWHERE_CRT" && -n "$NOWHERE_TLS_KEY" ]] || die "tls=2 requires --crt and --tls-key."
     [[ -f "$NOWHERE_CRT" ]] || die "Certificate file not found: ${NOWHERE_CRT}"
@@ -700,9 +667,6 @@ build_portal_url() {
   host_part="$(format_host_for_url "${NOWHERE_LISTEN_HOST:-}")"
   query="tls=${NOWHERE_TLS}"
 
-  if [[ "$NOWHERE_PROTOCOL" == "legacy" && -n "$NOWHERE_SPEC" ]]; then
-    query="${query}&spec=$(urlencode "$NOWHERE_SPEC")"
-  fi
   if [[ -n "$NOWHERE_ALPN" && "$NOWHERE_ALPN" != "$DEFAULT_ALPN" ]]; then
     query="${query}&alpn=$(urlencode "$NOWHERE_ALPN")"
   fi
@@ -735,18 +699,10 @@ build_anywhere_client_query() {
   local up="$1"
   local down="$2"
   local query
-  if version_at_least "${NOWHERE_VERSION_VALUE:-$DEFAULT_LEGACY_VERSION}" 1 3 0; then
-    query="up=${up}&down=${down}"
-  else
-    [[ "$up" == "$down" ]] || return 1
-    query="net=${up}"
-  fi
+  query="up=${up}&down=${down}"
 
   if [[ "$up" == "tcp" && "$down" == "tcp" ]]; then
     query="${query}&pool=${NOWHERE_POOL_VALUE:-$DEFAULT_POOL}"
-  fi
-  if ! version_at_least "${NOWHERE_VERSION_VALUE:-$DEFAULT_LEGACY_VERSION}" 1 5 0 && [[ -n "${NOWHERE_SPEC_VALUE:-}" ]]; then
-    query="${query}&spec=$(urlencode "$NOWHERE_SPEC_VALUE")"
   fi
   if [[ -n "${NOWHERE_ALPN_VALUE:-}" && "$NOWHERE_ALPN_VALUE" != "$DEFAULT_ALPN" ]]; then
     query="${query}&alpn=$(urlencode "$NOWHERE_ALPN_VALUE")"
@@ -789,35 +745,20 @@ default_vector_sni_for() {
 configure_values() {
   load_config
 
-  local generated_key generated_spec detected_host default_tls normalized_protocol saved_protocol saved_client
+  local generated_key detected_host default_tls saved_client
   generated_key="$(random_token 24)"
-  generated_spec="$(random_token 12)"
   detected_host="$(detect_public_host)"
 
-  saved_protocol="$(normalize_protocol "${NOWHERE_PROTOCOL_VALUE:-$DEFAULT_PROTOCOL}")" || saved_protocol="$DEFAULT_PROTOCOL"
-  normalized_protocol="$(normalize_protocol "${NOWHERE_PROTOCOL:-$saved_protocol}")" || die "NOWHERE_PROTOCOL must be legacy or modern."
-  NOWHERE_PROTOCOL="$normalized_protocol"
-  NOWHERE_VERSION="${NOWHERE_VERSION:-${NOWHERE_VERSION_VALUE:-$(default_version_for_protocol "$NOWHERE_PROTOCOL")}}"
+  NOWHERE_VERSION="${NOWHERE_VERSION:-${NOWHERE_VERSION_VALUE:-$DEFAULT_MODERN_VERSION}}"
   if [[ -n "${NOWHERE_CLIENT_VALUE:-}" ]]; then
     saved_client="$(normalize_client "$NOWHERE_CLIENT_VALUE")" || saved_client="$DEFAULT_CLIENT"
-  elif [[ "${NOWHERE_PROTOCOL_VALUE:-}" == "vector" ]]; then
-    saved_client="vector"
   else
     saved_client="$DEFAULT_CLIENT"
   fi
-  if [[ "$NOWHERE_PROTOCOL" == "legacy" ]]; then
-    NOWHERE_CLIENT="anywhere"
-  else
-    NOWHERE_CLIENT="$(normalize_client "${NOWHERE_CLIENT:-$saved_client}")" || die "NOWHERE_CLIENT must be anywhere, vector, or both."
-  fi
+  NOWHERE_CLIENT="$(normalize_client "${NOWHERE_CLIENT:-$saved_client}")" || die "NOWHERE_CLIENT must be anywhere, vector, or both."
 
   NOWHERE_PORT="${NOWHERE_PORT:-${NOWHERE_PORT_VALUE:-$DEFAULT_PORT}}"
   NOWHERE_KEY="${NOWHERE_KEY:-${NOWHERE_KEY_VALUE:-$generated_key}}"
-  if [[ "$NOWHERE_PROTOCOL" == "legacy" ]]; then
-    NOWHERE_SPEC="${NOWHERE_SPEC:-${NOWHERE_SPEC_VALUE:-$generated_spec}}"
-  else
-    NOWHERE_SPEC=""
-  fi
   NOWHERE_NET="${NOWHERE_NET:-${NOWHERE_NET_VALUE:-$DEFAULT_NET}}"
   NOWHERE_ALPN="${NOWHERE_ALPN:-${NOWHERE_ALPN_VALUE:-$DEFAULT_ALPN}}"
   NOWHERE_RATE="${NOWHERE_RATE:-${NOWHERE_RATE_VALUE:-0}}"
@@ -825,11 +766,8 @@ configure_values() {
   NOWHERE_DIAL="${NOWHERE_DIAL:-${NOWHERE_DIAL_VALUE:-auto}}"
   NOWHERE_SOCKS="${NOWHERE_SOCKS:-${NOWHERE_SOCKS_VALUE:-$DEFAULT_SOCKS}}"
   NOWHERE_LOG="${NOWHERE_LOG:-${NOWHERE_LOG_VALUE:-$DEFAULT_LOG}}"
-  if [[ "$NOWHERE_PROTOCOL" != "$saved_protocol" ]]; then
-    NOWHERE_POOL="${NOWHERE_POOL:-$DEFAULT_POOL}"
-  else
-    NOWHERE_POOL="${NOWHERE_POOL:-${NOWHERE_POOL_VALUE:-$DEFAULT_POOL}}"
-  fi
+  NOWHERE_TELEMETRY_INTERVAL="${NOWHERE_TELEMETRY_INTERVAL:-${NOW_TELEMETRY_INTERVAL:-${NOWHERE_TELEMETRY_INTERVAL_VALUE:-$DEFAULT_TELEMETRY_INTERVAL}}}"
+  NOWHERE_POOL="${NOWHERE_POOL:-${NOWHERE_POOL_VALUE:-$DEFAULT_POOL}}"
   NOWHERE_VECTOR_SOCKS="${NOWHERE_VECTOR_SOCKS:-${NOWHERE_VECTOR_SOCKS_VALUE:-$DEFAULT_VECTOR_SOCKS}}"
   NOWHERE_VECTOR_SNI="${NOWHERE_VECTOR_SNI:-${NOWHERE_VECTOR_SNI_VALUE:-}}"
   NOWHERE_VECTOR_PIN="${NOWHERE_VECTOR_PIN:-${NOWHERE_VECTOR_PIN_VALUE:-$DEFAULT_VECTOR_PIN}}"
@@ -844,17 +782,12 @@ configure_values() {
   NOWHERE_TLS="${NOWHERE_TLS:-${NOWHERE_TLS_VALUE:-$default_tls}}"
 
   if [[ "$ASSUME_YES" -eq 0 ]]; then
-    info "进入 $(protocol_label "$NOWHERE_PROTOCOL") 配置向导：一路回车即可使用默认值。"
-    if [[ "$NOWHERE_PROTOCOL" == "modern" ]]; then
-      NOWHERE_CLIENT="$(read_value "客户端链接 anywhere/vector/both" "$NOWHERE_CLIENT")"
-    fi
+    info "进入 Nowhere 配置向导：一路回车即可使用默认值。"
+    NOWHERE_CLIENT="$(read_value "客户端链接 anywhere/vector/both" "$NOWHERE_CLIENT")"
     NOWHERE_PUBLIC_HOST="$(read_value "公网域名/IP，用于客户端连接" "$NOWHERE_PUBLIC_HOST")"
     NOWHERE_LISTEN_HOST="$(read_value "监听地址，留空表示 IPv4/IPv6 全部监听" "$NOWHERE_LISTEN_HOST")"
     NOWHERE_PORT="$(read_value "监听端口" "$NOWHERE_PORT")"
     NOWHERE_KEY="$(read_value "Shared Key" "$NOWHERE_KEY")"
-    if [[ "$NOWHERE_PROTOCOL" == "legacy" ]]; then
-      NOWHERE_SPEC="$(read_value "Spec Seed" "$NOWHERE_SPEC")"
-    fi
     NOWHERE_NET="$(read_value "监听模式 mix/tcp/udp" "$NOWHERE_NET")"
     NOWHERE_ALPN="$(read_value "ALPN" "$NOWHERE_ALPN")"
     NOWHERE_TLS="$(read_value "TLS 模式：1=临时自签，2=PEM 证书" "$NOWHERE_TLS")"
@@ -867,6 +800,7 @@ configure_values() {
     NOWHERE_DIAL="$(read_value "出站源 IP，auto 表示系统默认" "$NOWHERE_DIAL")"
     NOWHERE_SOCKS="$(read_value "SOCKS5 出站代理，none/host:port/user:pass@host:port" "$NOWHERE_SOCKS")"
     NOWHERE_LOG="$(read_value "日志级别 none/debug/info/warn/error/event" "$NOWHERE_LOG")"
+    NOWHERE_TELEMETRY_INTERVAL="$(read_value "TUI 遥测刷新间隔 250ms..60s" "$NOWHERE_TELEMETRY_INTERVAL")"
     if [[ "$NOWHERE_CLIENT" == "vector" || "$NOWHERE_CLIENT" == "both" ]]; then
       if [[ "$NOWHERE_CLIENT" == "both" ]]; then
         NOWHERE_POOL="$(read_value "TCP pool（Anywhere 限制为 0..9）" "$NOWHERE_POOL")"
@@ -900,14 +834,12 @@ save_config() {
   install -d -m 700 "$CONFIG_DIR"
   cat >"$CONFIG_FILE" <<EOF
 NOWHERE_PORTAL=$(env_quote "$NOWHERE_PORTAL")
-NOWHERE_PROTOCOL_VALUE=$(env_quote "$NOWHERE_PROTOCOL")
 NOWHERE_CLIENT_VALUE=$(env_quote "$NOWHERE_CLIENT")
 NOWHERE_VERSION_VALUE=$(env_quote "$NOWHERE_VERSION")
 NOWHERE_PUBLIC_HOST_VALUE=$(env_quote "$NOWHERE_PUBLIC_HOST")
 NOWHERE_LISTEN_HOST_VALUE=$(env_quote "$NOWHERE_LISTEN_HOST")
 NOWHERE_PORT_VALUE=$(env_quote "$NOWHERE_PORT")
 NOWHERE_KEY_VALUE=$(env_quote "$NOWHERE_KEY")
-NOWHERE_SPEC_VALUE=$(env_quote "$NOWHERE_SPEC")
 NOWHERE_NET_VALUE=$(env_quote "$NOWHERE_NET")
 NOWHERE_ALPN_VALUE=$(env_quote "$NOWHERE_ALPN")
 NOWHERE_TLS_VALUE=$(env_quote "$NOWHERE_TLS")
@@ -918,6 +850,8 @@ NOWHERE_ETAR_VALUE=$(env_quote "$NOWHERE_ETAR")
 NOWHERE_DIAL_VALUE=$(env_quote "$NOWHERE_DIAL")
 NOWHERE_SOCKS_VALUE=$(env_quote "$NOWHERE_SOCKS")
 NOWHERE_LOG_VALUE=$(env_quote "$NOWHERE_LOG")
+NOWHERE_TELEMETRY_INTERVAL_VALUE=$(env_quote "$NOWHERE_TELEMETRY_INTERVAL")
+NOW_TELEMETRY_INTERVAL=$(env_quote "$NOWHERE_TELEMETRY_INTERVAL")
 NOWHERE_POOL_VALUE=$(env_quote "$NOWHERE_POOL")
 NOWHERE_VECTOR_SOCKS_VALUE=$(env_quote "$NOWHERE_VECTOR_SOCKS")
 NOWHERE_VECTOR_SNI_VALUE=$(env_quote "$NOWHERE_VECTOR_SNI")
@@ -947,7 +881,7 @@ install_binary() {
 
   local version="${1:-${NOWHERE_VERSION:-}}"
   local asset url tmpdir binary
-  validate_release_version "$version" || die "An exact release version such as v1.5.1 is required."
+  validate_release_version "$version" || die "An exact release version such as v1.6.0 is required."
   asset="$(detect_asset)"
   url="https://github.com/${REPO}/releases/download/${version}/${asset}"
   tmpdir="$(mktemp -d)"
@@ -1012,23 +946,31 @@ restart_service() {
   print_tls_fingerprint
 }
 
+open_tui() {
+  require_root
+  [[ -x "$BIN_PATH" ]] || die "Nowhere is not installed at ${BIN_PATH}."
+  [[ -t 0 && -t 1 ]] || die "The Nowhere TUI requires an interactive terminal."
+  load_config
+  local version="${NOWHERE_VERSION_VALUE:-}"
+  [[ -n "$version" ]] || die "No installed version is recorded in ${CONFIG_FILE}."
+  version_at_least "$version" 1 6 0 || die "The Terminal UI requires Nowhere v1.6.0 or newer; installed: ${version}."
+  "$BIN_PATH" tui
+}
+
 print_links() {
   require_root
   load_config
   [[ -n "${NOWHERE_KEY_VALUE:-}" ]] || die "No config found. Run install or configure first."
 
-  local protocol client version host host_part encoded_key encoded_name base udp_link tcp_link tcp_udp_link udp_tcp_link
+  local client version host host_part encoded_key encoded_name base udp_link tcp_link tcp_udp_link udp_tcp_link
   local import_udp import_tcp import_tcp_udp import_udp_tcp
-  protocol="$(normalize_protocol "${NOWHERE_PROTOCOL_VALUE:-$DEFAULT_PROTOCOL}")" || die "Invalid saved protocol mode."
   if [[ -n "${NOWHERE_CLIENT_VALUE:-}" ]]; then
     client="$(normalize_client "$NOWHERE_CLIENT_VALUE")" || client="$DEFAULT_CLIENT"
-  elif [[ "${NOWHERE_PROTOCOL_VALUE:-}" == "vector" ]]; then
-    client="vector"
   else
     client="$DEFAULT_CLIENT"
   fi
-  [[ "$protocol" == "legacy" ]] && client="anywhere"
-  version="${NOWHERE_VERSION_VALUE:-$(default_version_for_protocol "$protocol")}"
+  version="${NOWHERE_VERSION_VALUE:-$DEFAULT_MODERN_VERSION}"
+  require_supported_version "$version"
   host="${NOWHERE_PUBLIC_HOST_VALUE:-}"
   [[ -n "$host" ]] || host="$(detect_public_host)"
   [[ -n "$host" ]] || die "Public host is empty. Re-run configure with --public-host."
@@ -1036,7 +978,6 @@ print_links() {
   encoded_key="$(urlencode "$NOWHERE_KEY_VALUE")"
 
   echo
-  echo "Protocol mode: $(protocol_label "$protocol")"
   echo "Client output: $(client_label "$client")"
   echo "Release: ${version}"
   echo
@@ -1088,12 +1029,10 @@ print_links() {
     import_udp="anywhere://add-proxy?link=$(urlencode "$udp_link")"
     import_tcp="anywhere://add-proxy?link=$(urlencode "$tcp_link")"
 
-    if version_at_least "$version" 1 3 0; then
-      tcp_udp_link="${base}?$(build_anywhere_client_query tcp udp)#${encoded_name}"
-      udp_tcp_link="${base}?$(build_anywhere_client_query udp tcp)#${encoded_name}"
-      import_tcp_udp="anywhere://add-proxy?link=$(urlencode "$tcp_udp_link")"
-      import_udp_tcp="anywhere://add-proxy?link=$(urlencode "$udp_tcp_link")"
-    fi
+    tcp_udp_link="${base}?$(build_anywhere_client_query tcp udp)#${encoded_name}"
+    udp_tcp_link="${base}?$(build_anywhere_client_query udp tcp)#${encoded_name}"
+    import_tcp_udp="anywhere://add-proxy?link=$(urlencode "$tcp_udp_link")"
+    import_udp_tcp="anywhere://add-proxy?link=$(urlencode "$udp_tcp_link")"
 
     if [[ "${NOWHERE_NET_VALUE:-mix}" == "tcp" ]]; then
       echo "Anywhere import link (TLS/TCP):"
@@ -1113,7 +1052,7 @@ print_links() {
       echo
       echo "Anywhere import link (TLS/TCP fallback):"
       echo "  ${tcp_link}"
-      if version_at_least "$version" 1 3 0 && [[ -z "${NOWHERE_SOCKS_VALUE:-}" || "${NOWHERE_SOCKS_VALUE}" == "$DEFAULT_SOCKS" ]]; then
+      if [[ -z "${NOWHERE_SOCKS_VALUE:-}" || "${NOWHERE_SOCKS_VALUE}" == "$DEFAULT_SOCKS" ]]; then
         echo
         echo "Anywhere import links (split carriers):"
         echo "  up=tcp/down=udp: ${tcp_udp_link}"
@@ -1125,7 +1064,7 @@ print_links() {
       echo
       echo "Anywhere deep link (TLS/TCP):"
       echo "  ${import_tcp}"
-      if version_at_least "$version" 1 3 0 && [[ -z "${NOWHERE_SOCKS_VALUE:-}" || "${NOWHERE_SOCKS_VALUE}" == "$DEFAULT_SOCKS" ]]; then
+      if [[ -z "${NOWHERE_SOCKS_VALUE:-}" || "${NOWHERE_SOCKS_VALUE}" == "$DEFAULT_SOCKS" ]]; then
         echo
         echo "Anywhere deep links (split carriers):"
         echo "  up=tcp/down=udp: ${import_tcp_udp}"
@@ -1174,17 +1113,7 @@ install_all() {
   print_tls_fingerprint
 }
 
-install_legacy_all() {
-  NOWHERE_PROTOCOL="legacy"
-  NOWHERE_CLIENT="anywhere"
-  if [[ "$VERSION_EXPLICIT" -eq 0 ]]; then
-    NOWHERE_VERSION="$DEFAULT_LEGACY_VERSION"
-  fi
-  install_all
-}
-
 install_vector_all() {
-  NOWHERE_PROTOCOL="modern"
   NOWHERE_CLIENT="vector"
   if [[ "$VERSION_EXPLICIT" -eq 0 ]]; then
     NOWHERE_VERSION="$DEFAULT_VECTOR_VERSION"
@@ -1193,7 +1122,6 @@ install_vector_all() {
 }
 
 install_anywhere_all() {
-  NOWHERE_PROTOCOL="modern"
   NOWHERE_CLIENT="anywhere"
   if [[ "$VERSION_EXPLICIT" -eq 0 ]]; then
     NOWHERE_VERSION="$DEFAULT_MODERN_VERSION"
@@ -1201,23 +1129,12 @@ install_anywhere_all() {
   install_all
 }
 
-install_by_protocol() {
-  local requested_protocol
-  if [[ "$VERSION_EXPLICIT" -eq 1 ]]; then
-    requested_protocol="$(protocol_for_version "$NOWHERE_VERSION")"
-  else
-    requested_protocol="$(normalize_protocol "${NOWHERE_PROTOCOL:-$DEFAULT_PROTOCOL}")" || die "NOWHERE_PROTOCOL must be legacy or modern."
+install_default_all() {
+  NOWHERE_CLIENT="$(normalize_client "${NOWHERE_CLIENT:-$DEFAULT_CLIENT}")" || die "NOWHERE_CLIENT must be anywhere, vector, or both."
+  if [[ "$VERSION_EXPLICIT" -eq 0 ]]; then
+    NOWHERE_VERSION="$DEFAULT_MODERN_VERSION"
   fi
-  if [[ "$requested_protocol" == "modern" ]]; then
-    NOWHERE_PROTOCOL="modern"
-    NOWHERE_CLIENT="$(normalize_client "${NOWHERE_CLIENT:-$DEFAULT_CLIENT}")" || die "NOWHERE_CLIENT must be anywhere, vector, or both."
-    if [[ "$VERSION_EXPLICIT" -eq 0 ]]; then
-      NOWHERE_VERSION="$DEFAULT_MODERN_VERSION"
-    fi
-    install_all
-  else
-    install_legacy_all
-  fi
+  install_all
 }
 
 quick_install_anywhere_all() {
@@ -1228,14 +1145,8 @@ configure_all() {
   require_root
   require_systemd
   load_config
-  [[ -n "${NOWHERE_PROTOCOL_VALUE:-}" ]] || warn "旧配置未记录协议模式，将按已安装版本自动判断。"
-  local saved_protocol
-  saved_protocol="$(normalize_protocol "${NOWHERE_PROTOCOL_VALUE:-$(protocol_for_version "${NOWHERE_VERSION_VALUE:-$DEFAULT_MODERN_VERSION}")}")" || die "Invalid saved protocol mode."
-  if [[ -n "${NOWHERE_PROTOCOL:-}" ]]; then
-    [[ "$(normalize_protocol "$NOWHERE_PROTOCOL")" == "$saved_protocol" ]] || die "Use install/versions to switch protocol generations safely."
-  fi
-  NOWHERE_PROTOCOL="$saved_protocol"
-  NOWHERE_VERSION="${NOWHERE_VERSION_VALUE:-$(default_version_for_protocol "$saved_protocol")}"
+  NOWHERE_VERSION="${NOWHERE_VERSION_VALUE:-$DEFAULT_MODERN_VERSION}"
+  require_supported_version "$NOWHERE_VERSION"
   configure_values
   save_config
   write_service
@@ -1270,8 +1181,8 @@ update_all() {
   load_config
   [[ -n "${NOWHERE_VERSION_VALUE:-}" ]] || die "No existing installation config found. Run install first."
 
-  local old_protocol new_protocol selected
-  old_protocol="$(normalize_protocol "${NOWHERE_PROTOCOL_VALUE:-$(protocol_for_version "$NOWHERE_VERSION_VALUE")}")" || die "Invalid saved protocol mode."
+  local selected
+  require_supported_version "$NOWHERE_VERSION_VALUE"
   if [[ "$VERSION_EXPLICIT" -eq 1 ]]; then
     selected="$NOWHERE_VERSION"
     validate_release_version "$selected" || die "Invalid release version: ${selected}"
@@ -1282,16 +1193,7 @@ update_all() {
     fi
     selected="$SELECTED_VERSION"
   fi
-  new_protocol="$(protocol_for_version "$selected")"
-
-  if [[ "$new_protocol" != "$old_protocol" ]]; then
-    warn "${NOWHERE_VERSION_VALUE} 到 ${selected} 跨越 v1.5 协议边界，需要迁移配置。"
-    NOWHERE_VERSION="$selected"
-    NOWHERE_PROTOCOL="$new_protocol"
-    unset NOWHERE_SPEC
-    install_all
-    return
-  fi
+  require_supported_version "$selected"
 
   install_binary "$selected"
   update_saved_version "$selected"
@@ -1313,9 +1215,8 @@ install_selected_release() {
     return 0
   fi
   NOWHERE_VERSION="$SELECTED_VERSION"
-  NOWHERE_PROTOCOL="$(protocol_for_version "$NOWHERE_VERSION")"
   echo
-  info "已选择 ${NOWHERE_VERSION}，将使用 $(protocol_label "$NOWHERE_PROTOCOL") 配置。"
+  info "已选择 ${NOWHERE_VERSION}。"
   install_all
 }
 
@@ -1337,17 +1238,17 @@ menu() {
 ==============================
  Nowhere VPS 管理脚本
 ==============================
-  1) 安装/重装新版（Anywhere 2.0，${DEFAULT_MODERN_VERSION}）
-  2) 安装/重装新版（Native Vector，${DEFAULT_VECTOR_VERSION}）
-  3) 快速默认安装（Anywhere 2.0，${DEFAULT_MODERN_VERSION}）
-  4) 修改当前协议模式配置（向导）
-  5) 指定 Release 安装/切换（最近 10 个版本）
-  6) 更新 Nowhere 二进制（保留当前配置）
-  7) 安装/重装旧版（Anywhere 1.x，${DEFAULT_LEGACY_VERSION}）
-  8) 启动服务
-  9) 停止服务
- 10) 重启服务
- 11) 查看状态
+  1) 安装/重装（Anywhere）
+  2) 安装/重装（Native Vector）
+  3) 快速默认安装（Anywhere）
+  4) 修改配置（向导）
+  5) 指定 Release 安装/切换
+  6) 更新 Nowhere 二进制
+  7) 启动服务
+  8) 停止服务
+  9) 重启服务
+ 10) 查看状态
+ 11) 打开 Terminal UI（只读监控）
  12) 查看日志
  13) 打印客户端链接/命令
  14) 查看 tls=1 自签证书 SHA-256
@@ -1362,11 +1263,11 @@ EOF
       4) configure_all ;;
       5) install_selected_release ;;
       6) update_all ;;
-      7) install_legacy_all ;;
-      8) start_service ;;
-      9) service_cmd stop ;;
-      10) restart_service ;;
-      11) service_cmd status ;;
+      7) start_service ;;
+      8) service_cmd stop ;;
+      9) restart_service ;;
+      10) service_cmd status ;;
+      11) open_tui ;;
       12) journalctl -u "$SERVICE_NAME" -f ;;
       13) print_links ;;
       14) print_tls_fingerprint ;;
@@ -1378,9 +1279,8 @@ EOF
 }
 
 case "$ACTION" in
-  install) install_by_protocol ;;
+  install) install_default_all ;;
   install-anywhere|anywhere) install_anywhere_all ;;
-  install-legacy) install_legacy_all ;;
   install-vector|vector) install_vector_all ;;
   configure|config) configure_all ;;
   update) update_all ;;
@@ -1388,6 +1288,7 @@ case "$ACTION" in
   start) start_service ;;
   restart) restart_service ;;
   stop|status) service_cmd "$ACTION" ;;
+  tui|dashboard|monitor) open_tui ;;
   fingerprint|sha256|sha-256) print_tls_fingerprint ;;
   logs|log) require_root; journalctl -u "$SERVICE_NAME" -f ;;
   link|links) print_links ;;
